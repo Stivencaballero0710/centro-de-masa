@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Centro de masa y vibración — proporcional a ΣF</title>
+  <style>
+    :root{--bg:#0f172a;--panel:#111827;--ink:#e5e7eb;--muted:#94a3b8;--ok:#22c55e;--warn:#ef4444;--accent:#38bdf8;--cm:#fde047}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}
+    .wrap{max-width:1160px;margin:24px auto;padding:0 16px}
+    h1{font-size:20px;margin:0 0 12px}
+    .panel{background:var(--panel);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:16px}
+    .grid{display:grid;grid-template-columns:1fr;gap:12px}
+    .controls{display:grid;grid-template-columns:repeat(11,minmax(0,1fr));gap:10px;align-items:end;margin-top:8px}
+    .control{font-size:12px}
+    .control label{display:block;color:var(--muted);margin-bottom:6px}
+    input[type="range"]{width:100%}
+    .toggle{display:flex;gap:8px;align-items:center}
+    .badge{font-size:11px;padding:4px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1}
+    canvas{width:100%;height:540px;background:#0b1220;border-radius:12px}
+    .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;color:#cbd5e1;font-size:12px}
+    .dot{display:inline-block;width:10px;height:10px;border-radius:50%}
+    .small{color:#94a3b8;font-size:12px;margin-top:4px}
+    .hud{display:flex;gap:12px;flex-wrap:wrap;background:#0b1220;padding:8px 10px;border-radius:10px;font-size:12px;color:#cbd5e1}
+    .hud b{color:#e5e7eb}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Centro de masa y vibración — desplazamiento proporcional a ΣF</h1>
+    <div class="panel">
+      <div class="grid">
+        <div class="hud" id="hud"></div>
+        <canvas id="sim" width="1120" height="540"></canvas>
+        <div class="legend">
+          <div><span class="dot" style="background:#38bdf8"></span> Masas (tamaño ∝ √M)</div>
+          <div><span class="dot" style="background:#22c55e"></span> Fc (fuerza centrípeta hacia el centro)</div>
+          <div><span class="dot" style="background:#ef4444"></span> ΣF en el eje (flecha roja) — vibra más si la masa ↑</div>
+          <div><span class="dot" style="background:#fde047"></span> Centro de masa (CM) y su trazo</div>
+        </div>
+        <div class="controls">
+          <div class="control"><label>ω (rad/s)</label><input id="omega" type="range" min="0" max="25" step="0.1" value="9" /></div>
+          <div class="control"><label>Radio R (m)</label><input id="radius" type="range" min="40" max="200" step="1" value="135" /></div>
+          <div class="control"><label>M₁ (kg)</label><input id="mass1" type="range" min="0.2" max="8" step="0.1" value="1.5" /></div>
+          <div class="control toggle"><input id="addM2" type="checkbox" /><label for="addM2" class="badge">Añadir M₂</label></div>
+          <div class="control"><label>M₂ (kg)</label><input id="mass2" type="range" min="0" max="8" step="0.1" value="2.5" /></div>
+          <div class="control"><label>Δφ de M₂ (°)</label><input id="phi" type="range" min="0" max="360" step="1" value="60" /></div>
+          <div class="control"><label>Rigidez</label><input id="stiff" type="range" min="0.5" max="6" step="0.1" value="2.0" /></div>
+          <div class="control"><label>Ganancia vibración</label><input id="vamp" type="range" min="0.5" max="10" step="0.1" value="2.0" /></div>
+          <div class="control toggle"><input id="balanceRef" type="checkbox" checked /><label for="balanceRef" class="badge">Referencia balanceada</label></div>
+          <div class="control toggle"><input id="traceCM" type="checkbox" checked /><label for="traceCM" class="badge">Trazo del CM</label></div>
+          <div class="control toggle"><input id="showFc" type="checkbox" checked /><label for="showFc" class="badge">Mostrar Fc</label></div>
+        </div>
+        <div class="small">Aumenta M₂ o reduce rigidez ⇒ más vibración (el eje se desplaza más). Si M₂≈M₁ y Δφ≈180°, se cancela ΣF ⇒ sin vibración.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const canvas = $("sim");
+    const ctx = canvas.getContext("2d");
+    const hud = $("hud");
+
+    const state = {
+      t: 0,
+      omega: +$("omega").value,
+      R: +$("radius").value,
+      M1: +$("mass1").value,
+      addM2: $("addM2").checked,
+      M2: +$("mass2").value,
+      phi: +$("phi").value * Math.PI/180,
+      stiff: +$("stiff").value,
+      vamp: +$("vamp").value,
+      balanceRef: $("balanceRef").checked,
+      traceCM: $("traceCM").checked,
+      showFc: $("showFc").checked,
+      cmTraceRight: [],
+      cmTraceMax: 200
+    };
+
+    ["omega","radius","mass1","mass2","phi","stiff","vamp","addM2","balanceRef","traceCM","showFc"].forEach(id=>{
+      $(id).addEventListener("input",()=>{
+        state.omega = +$("omega").value;
+        state.R = +$("radius").value;
+        state.M1 = +$("mass1").value;
+        state.addM2 = $("addM2").checked;
+        state.M2 = +$("mass2").value;
+        state.phi = +$("phi").value * Math.PI/180;
+        state.stiff = +$("stiff").value;
+        state.vamp = +$("vamp").value;
+        state.balanceRef = $("balanceRef").checked;
+        state.traceCM = $("traceCM").checked;
+        state.showFc = $("showFc").checked;
+        if(!state.traceCM){ state.cmTraceRight = []; }
+      });
+    });
+
+    function fmt(x, n=2){ return (+x).toFixed(n); }
+
+    function drawArrow(x1,y1,x2,y2,color,width=3){
+      const head = 10;
+      const angle = Math.atan2(y2-y1,x2-x1);
+      ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=width; 
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x2,y2);
+      ctx.lineTo(x2-head*Math.cos(angle-0.5), y2-head*Math.sin(angle-0.5));
+      ctx.lineTo(x2-head*Math.cos(angle+0.5), y2-head*Math.sin(angle+0.5));
+      ctx.closePath(); ctx.fill();
+    }
+
+    function rotorQuantities(angle, masses){
+      let Fx=0, Fy=0;
+      let Mtot=0, CMx=0, CMy=0;
+      masses.forEach(m=>{
+        const a = angle + m.phi;
+        const x = state.R * Math.cos(a);
+        const y = state.R * Math.sin(a);
+        CMx += m.M * x; CMy += m.M * y; Mtot += m.M;
+        const Fc = m.M * state.omega * state.omega * state.R;
+        const ux = -Math.cos(a), uy = -Math.sin(a);
+        Fx += -ux*Fc; Fy += -uy*Fc;
+      });
+      if(Mtot>0){ CMx/=Mtot; CMy/=Mtot; }
+      return {Fx, Fy, CMx, CMy, Mtot};
+    }
+
+    function drawRotor(cx,cy,angle,{masses, drawRef=false}){
+      const {Fx, Fy, CMx, CMy, Mtot} = rotorQuantities(angle, masses);
+      const k = 0.004;
+      const dx = (Fx / Math.max(0.1, state.stiff)) * state.vamp * k;
+      const dy = (Fy / Math.max(0.1, state.stiff)) * state.vamp * k;
+      if(!drawRef && state.traceCM){
+        state.cmTraceRight.push({x: cx + dx + CMx, y: cy + dy + CMy});
+        if(state.cmTraceRight.length > state.cmTraceMax){ state.cmTraceRight.shift(); }
+      }
+      ctx.save(); ctx.translate(cx+dx, cy+dy);
+      ctx.strokeStyle="#334155"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(0,0,state.R+24,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle="#0b1220"; ctx.beginPath(); ctx.arc(0,0,state.R+24,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="#cbd5e1"; ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
+      const mColor="#38bdf8", FColor="#22c55e", NetColor="#ef4444", CMColor="#fde047";
+      const FcVals=masses.map(m=>m.M*state.omega*state.omega*state.R);
+      const FcScale=70/Math.max(1,...FcVals);
+      masses.forEach((m,i)=>{
+        const a=angle+m.phi;
+        const x=state.R*Math.cos(a), y=state.R*Math.sin(a);
+        const r=6+6*Math.sqrt(Math.max(0.1,m.M))/Math.sqrt(8);
+        ctx.fillStyle=mColor; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle="#e5e7eb"; ctx.font="12px system-ui";
+        ctx.fillText((i===0?"M₁=":"M₂=")+fmt(m.M)+"kg",x+10,y-10);
+        if(state.showFc){ const Fc=m.M*state.omega*state.omega*state.R;
+          const ux=-Math.cos(a),uy=-Math.sin(a);
+          drawArrow(x,y,x+ux*Fc*FcScale,y+uy*Fc*FcScale,FColor,3);}
+      });
+      ctx.strokeStyle=CMColor; ctx.lineWidth=1.5; ctx.setLineDash([6,6]);
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(CMx,CMy); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle=CMColor; ctx.beginPath(); ctx.arc(CMx,CMy,5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="#fef08a"; ctx.font="12px system-ui"; ctx.fillText("CM",CMx+8,CMy-8);
+      const Fnet=Math.hypot(Fx,Fy);
+      const netK=0.008;
+      drawArrow(0,0,Fx*netK,Fy*netK,NetColor,3);
+      ctx.restore();
+      return {Fnet};
+    }
+
+    function updateHUD({FnetLeft,FnetRight}){
+      const deg=(state.phi*180/Math.PI);
+      hud.innerHTML=`
+        <div><b>ω</b>: ${fmt(state.omega)} rad/s</div>
+        <div><b>R</b>: ${fmt(state.R)} m</div>
+        <div><b>M₁</b>: ${fmt(state.M1)} kg</div>
+        <div><b>M₂</b>: ${state.addM2?fmt(state.M2)+' kg':'—'}</div>
+        <div><b>Δφ</b>: ${state.addM2?fmt(deg,0)+'°':'—'}</div>
+        <div><b>Rigidez</b>: ${fmt(state.stiff)}</div>
+        <div><b>Ganancia</b>: ${fmt(state.vamp)}</div>
+        <div><b>|ΣF| ref</b>: ${fmt(FnetLeft)}</div>
+        <div><b>|ΣF| edit</b>: ${fmt(FnetRight)}</div>`;
+    }
+
+    function frame(){
+      state.t+=1/60; const angle=state.t*state.omega;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const cy=canvas.height*0.62, cx1=canvas.width*0.26, cx2=canvas.width*0.74;
+      let FnetLeft=0;
+      if(state.balanceRef){
+        const left=drawRotor(cx1,cy,angle,{masses:[{M:state.M1,phi:0},{M:state.M1,phi:Math.PI}],drawRef:true});
+        FnetLeft=left.Fnet;
+        ctx.fillStyle="#e5e7eb"; ctx.font="14px system-ui";
+        ctx.fillText("Referencia balanceada (ΣF≈0)",30,30);
+      }
+      const massesRight=[{M:state.M1,phi:0}];
+      if(state.addM2){massesRight.push({M:state.M2,phi:state.phi});}
+      const right=drawRotor(cx2,cy,angle,{masses:massesRight,drawRef:false});
+      ctx.fillStyle="#e5e7eb"; ctx.font="14px system-ui";
+      ctx.fillText("Escenario editable",canvas.width*0.5+30,30);
+      updateHUD({FnetLeft,FnetRight:right.Fnet});
+      if(state.traceCM && state.cmTraceRight.length>1){
+        ctx.save(); ctx.strokeStyle="#fde04788"; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(state.cmTraceRight[0].x,state.cmTraceRight[0].y);
+        for(let i=1;i<state.cmTraceRight.length;i++){ctx.lineTo(state.cmTraceRight[i].x,state.cmTraceRight[i].y);}
+        ctx.stroke(); ctx.restore();
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
